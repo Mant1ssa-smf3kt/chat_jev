@@ -201,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--contact", help="只看这个聊天对象（名字包含匹配）")
     w.add_argument("--frontmost", action="store_true", help="只在应用处于前台时读取")
     w.add_argument("--interval", type=float, default=1.0, help="轮询间隔秒")
-    w.add_argument("--hide-after", type=float, default=8.0, help="浮窗几秒后自动隐藏，0 = 不隐藏")
+    w.add_argument("--hide-after", type=float, default=5.0, help="浮窗几秒后自动隐藏，0 = 不隐藏")
     w.add_argument("--no-overlay", action="store_true", help="不显示浮窗，只在终端打印（没有 ⌥+点击）")
     w.add_argument("--auto", action="store_true", help="自动判对方新发的消息（默认关：只判 ⌥+点击选中的）")
     w.add_argument("--pick-only", action="store_true", help=argparse.SUPPRESS)   # 旧参数，现在就是默认行为

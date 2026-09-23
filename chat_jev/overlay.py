@@ -1,13 +1,15 @@
 """悬浮判别结果：YES（绿）/ NO（红）+ 概率 + 真实意图 + 消息片段。
 
 新消息的结果显示在屏幕右上角；⌥+点击选中的消息，结果贴在那个气泡旁边（传 anchor）。
-始终置顶、不抢焦点、可拖动、几秒后自动隐藏。必须在主线程调用。
+始终置顶、不抢焦点、可拖动、几秒后自动隐藏，右上角 × 可随时关掉。必须在主线程调用。
 """
 
 from __future__ import annotations
 
+import objc
 from AppKit import (
     NSBackingStoreBuffered,
+    NSButton,
     NSColor,
     NSFloatingWindowLevel,
     NSFont,
@@ -22,11 +24,12 @@ from AppKit import (
     NSWindowStyleMaskBorderless,
     NSWindowStyleMaskNonactivatingPanel,
 )
-from Foundation import NSTimer
+from Foundation import NSObject, NSTimer
 
 from .judge import ActionPlan, Verdict
 
 W, H, MARGIN, GAP = 320, 140, 20, 12
+PLAN_LINGER = 3.0   # 建议行出来后至少再留几秒
 
 Rect = tuple[float, float, float, float]   # 辅助功能坐标 (x, y, w, h)：原点主屏左上
 
@@ -44,8 +47,21 @@ def _label(frame, size, bold=False, alpha=1.0):
     return f
 
 
+class _CloseTarget(NSObject):
+    """NSButton 的 target 必须是 ObjC 对象，这里转手调回 Python。"""
+
+    def initWithCallback_(self, cb):
+        self = objc.super(_CloseTarget, self).init()
+        if self is not None:
+            self.cb = cb
+        return self
+
+    def close_(self, _sender) -> None:
+        self.cb()
+
+
 class Overlay:
-    def __init__(self, hide_after: float = 8.0) -> None:
+    def __init__(self, hide_after: float = 5.0) -> None:
         self.hide_after = hide_after
         self._timer: NSTimer | None = None
         self._home: tuple[float, float] | None = None   # 贴到气泡旁之前的位置，None = 当前就在常驻位置
@@ -69,12 +85,23 @@ class Overlay:
         self.panel.setContentView_(self.bg)
 
         self.verdict = _label(NSMakeRect(16, H - 52, 120, 40), 30, bold=True)
-        self.prob = _label(NSMakeRect(130, H - 44, W - 146, 24), 14, alpha=0.95)
+        self.prob = _label(NSMakeRect(130, H - 44, W - 166, 24), 14, alpha=0.95)
         self.intent = _label(NSMakeRect(16, H - 74, W - 32, 20), 13, alpha=0.9)
         self.plan = _label(NSMakeRect(16, H - 96, W - 32, 20), 13, bold=True)
         self.snippet = _label(NSMakeRect(16, 10, W - 32, 30), 12, alpha=0.75)
         for v in (self.verdict, self.prob, self.intent, self.plan, self.snippet):
             self.bg.addSubview_(v)
+
+        self._close_target = _CloseTarget.alloc().initWithCallback_(self.hide)
+        close = NSButton.alloc().initWithFrame_(NSMakeRect(W - 32, H - 32, 24, 24))
+        close.setBordered_(False)
+        close.setTitle_("✕")
+        close.setFont_(NSFont.systemFontOfSize_(14))
+        close.setContentTintColor_(NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.8))
+        close.setTarget_(self._close_target)
+        close.setAction_("close:")
+        close.setToolTip_("关闭")
+        self.bg.addSubview_(close)
 
     # -- public ------------------------------------------------------------------
 
@@ -97,12 +124,19 @@ class Overlay:
         self._paint(GREY, "✓", title, detail, "", anchor)
 
     def show_plan(self, plan: ActionPlan) -> None:
-        """在已显示的判别结果下面补一行建议，不重置颜色；顺便把自动隐藏往后推。"""
+        """在已显示的判别结果下面补一行建议，不重置颜色。
+
+        浮窗已经关掉（自动隐藏或点了 ×）就不再弹出来；还在的话只把自动隐藏推迟一点，
+        免得建议刚出来就消失，但不再从头计时。
+        """
         self.plan.setStringValue_(f"建议：{plan.best} {plan.probs.get(plan.best, 0) * 100:.0f}%")
-        self.panel.orderFrontRegardless()
-        self._schedule_hide()
+        if self.panel.isVisible():
+            self._schedule_hide(min(self.hide_after, PLAN_LINGER))
 
     def hide(self) -> None:
+        if self._timer is not None:
+            self._timer.invalidate()
+            self._timer = None
         self.panel.orderOut_(None)
 
     # -- internal ----------------------------------------------------------------
@@ -153,9 +187,11 @@ class Overlay:
         self.panel.orderFrontRegardless()
         self._schedule_hide()
 
-    def _schedule_hide(self) -> None:
+    def _schedule_hide(self, after: float | None = None) -> None:
         if self._timer is not None:
             self._timer.invalidate()
-        if self.hide_after > 0:
+            self._timer = None
+        after = self.hide_after if after is None else after
+        if after > 0:
             self._timer = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
-                self.hide_after, False, lambda _t: self.hide())
+                after, False, lambda _t: self.hide())
