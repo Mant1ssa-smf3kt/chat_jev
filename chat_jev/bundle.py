@@ -49,7 +49,7 @@ def selftest() -> int:
     """打包脚本用：确认冻结后的 app 能导入全部模块、读到配置模板，不弹任何权限框。"""
     import importlib
     for mod in ("app", "ax", "cli", "jev", "judge", "llm", "menubar", "overlay", "picker", "settings_window",
-                "sources.ax", "sources.clipboard"):
+                "updater", "sources.ax", "sources.clipboard"):
         importlib.import_module(f"chat_jev.{mod}")
     assert "AI_GATEWAY_API_KEY" in _template(), "没打包进 .env.example"
     print("selftest ok")

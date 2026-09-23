@@ -259,16 +259,22 @@ def run_gui(watcher: Watcher, interval: float, hide_after: float, pick: bool = T
     from .config import FROZEN
     from .settings_window import open_settings
     extra = [("设置…", lambda: open_settings(on_saved=watcher.reconfigure))]
+    updater = None
     if FROZEN:
         from .bundle import open_config, open_log
-        extra += [("打开配置文件…", open_config), ("打开日志", open_log)]
-    watcher.statusbar = StatusBar(on_toggle_pause=toggle_pause, on_show_last=show_last,
+        from .updater import Updater
+        updater = Updater(notify=lambda t, d: _on_main(lambda: watcher.overlay.show_info(t, d)),
+                          quit_app=lambda: _on_main(AppHelper.stopEventLoop))
+        extra += [("检查更新", lambda: updater.check_async(manual=True)),
+                  ("打开配置文件…", open_config), ("打开日志", open_log)]
+    watcher.statusbar = StatusBar(on_toggle_pause=toggle_pause if watcher.auto else None, on_show_last=show_last,
                                   on_quit=AppHelper.stopEventLoop, extra=extra)
     watcher._refresh_status()
     if waiting_permission:
         _wait_for_permission(watcher)
     else:
-        watcher.overlay.show_info("chat-jev 已启动", watcher.status_text() + "，结果会显示在这里和菜单栏")
+        tip = "按住 ⌥ 点 QQ 里对方的消息，结果显示在气泡旁边" if pick else watcher.status_text()
+        watcher.overlay.show_info("chat-jev 已启动", tip)
 
     picker = None
     if pick and hasattr(watcher.source, "pick"):
@@ -276,12 +282,29 @@ def run_gui(watcher: Watcher, interval: float, hide_after: float, pick: bool = T
         picker = ClickPicker(watcher.pick)      # 局部变量撑到事件循环结束，监听不会被回收
         print("[watch] 按住 ⌥ 点 QQ 里任意一条对方的消息，就在旁边判别它", file=sys.stderr)
 
+    if updater is not None:
+        _schedule_updates(updater)
+
     NSTimer.scheduledTimerWithTimeInterval_repeats_block_(interval, True, lambda _t: watcher.tick())
     print(f"[watch] source={watcher.source.name} 浮窗模式，每 {interval}s 轮询，菜单栏图标可退出，或 Ctrl-C", file=sys.stderr)
     try:
         AppHelper.runEventLoop(installInterrupt=True)
     except KeyboardInterrupt:
         pass
+
+
+def _schedule_updates(updater, first: float = 60.0, every: float = 6 * 3600) -> None:
+    """启动一分钟后查一次，之后每 6 小时一次。每次到点再看开关，设置里关掉立即生效。"""
+    import os
+
+    from Foundation import NSTimer
+
+    def fire(_t):
+        if os.environ.get("JEV_AUTO_UPDATE", "1") != "0":
+            updater.check_async()
+
+    NSTimer.scheduledTimerWithTimeInterval_repeats_block_(first, False, fire)
+    NSTimer.scheduledTimerWithTimeInterval_repeats_block_(every, True, fire)
 
 
 def _wait_for_permission(watcher: Watcher) -> None:

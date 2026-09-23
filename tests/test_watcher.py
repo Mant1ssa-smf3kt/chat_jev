@@ -28,7 +28,7 @@ class FakeAdapter:
 def make_source(frames):
     src = AppSource.__new__(AppSource)
     src.app, src.adapter, src.contact, src.only_when_frontmost = "fake", FakeAdapter(frames), None, False
-    src._prev, src.last_contact, src.transcripts = None, "", {}
+    src._prev, src.last_contact, src.transcripts, src._seen = None, "", {}, {}
     src._attach = lambda: True          # 跳过真实进程查找
     return src
 
@@ -208,3 +208,43 @@ def test_pick_only_mode_skips_new_messages():
                 out=io.StringIO(), sync=True, auto=False)
     src.poll(); w.tick()
     assert calls == [] and list(w.history["她"])[-1].text == "好"     # 不判，但照样记上下文
+
+
+def _count_judged(frames):
+    calls = []
+    src = make_source(frames)
+    w = Watcher(settings(), src, JevClient("k", transport=httpx.MockTransport(_verdict_handler(calls))),
+                out=io.StringIO(), sync=True)
+    src.poll()
+    for _ in frames[1:]:
+        w.tick()
+    return [c["state"]["待判断消息"]["内容"] for c in calls]
+
+
+def test_fast_scroll_up_and_back_does_not_rejudge_latest():
+    rows = [Row("them" if i % 2 else "me", "", f"m{i}") for i in range(40)]
+    bottom, top, middle = rows[25:40], rows[0:15], rows[12:27]
+    # 在底部 → 飞快滑到顶 → 滑回中间 → 回到底部：一条都不该判
+    assert _count_judged([Snapshot("她", bottom), Snapshot("她", top), Snapshot("她", middle),
+                          Snapshot("她", bottom), Snapshot("她", top), Snapshot("她", bottom)]) == []
+
+
+def test_new_message_after_scrolling_is_still_judged():
+    rows = [Row("them" if i % 2 else "me", "", f"m{i}") for i in range(40)]
+    new = rows[26:40] + [Row("them", "", "刚发的")]
+    assert _count_judged([Snapshot("她", rows[25:40]), Snapshot("她", rows[0:15]),
+                          Snapshot("她", rows[25:40]), Snapshot("她", new)]) == ["刚发的"]
+
+
+def test_repeated_short_reply_with_new_context_is_judged():
+    base = [Row("me", "", "吃了吗"), Row("them", "", "嗯")]
+    assert _count_judged([Snapshot("她", base),
+                          Snapshot("她", base + [Row("me", "", "那睡吧"), Row("them", "", "嗯")])]) == ["嗯"]
+
+
+def test_short_reply_at_window_top_does_not_mask_new_one():
+    rows = [Row("them" if i % 2 else "me", "", f"m{i}") for i in range(30)] + [Row("them", "", "嗯")]
+    top = [Row("them", "", "嗯")] + rows[0:14]           # 滑到顶时，最上面恰好是一句"嗯"
+    new = rows[17:31] + [Row("me", "", "睡吧"), Row("them", "", "嗯")]
+    assert _count_judged([Snapshot("她", rows[16:31]), Snapshot("她", top),
+                          Snapshot("她", rows[16:31]), Snapshot("她", new)]) == ["嗯"]

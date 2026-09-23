@@ -22,6 +22,7 @@ BUNDLE_IDS = {
 Rect = tuple[float, float, float, float]   # 辅助功能坐标 (x, y, w, h)：原点在主屏左上角
 
 NON_TEXT = "[非文本消息]"
+BURST = 5          # 一次冒出超过这么多条没见过的消息：是快速滑动跳过了一段，不是真来了新消息
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,9 @@ class AppSource:
         # QQ 的消息列表是虚拟滚动，一次只渲染十几条。每次读到的窗口都拼进这里，
         # 往上翻过的旧消息就能留下来，⌥+点击时当上下文用。按聊天对象分开。
         self.transcripts: dict[str, list[Row]] = {}
+        # 每个聊天里出现过的消息：内容 -> 它前面那条的内容。窗口最顶上那条不知道前一条，不记。
+        # 滑上滑下时锚点会乱，出现过的消息靠这个挡住，不会被当成新消息再判一遍。
+        self._seen: dict[str, dict[tuple, set]] = {}
 
     # -- 应用连接 --------------------------------------------------------------
 
@@ -286,12 +290,23 @@ class AppSource:
             self._prev = None          # 不是要看的聊天，清掉锚点
             return []
 
-        new_rows = self._diff(snap)
+        new_rows = self._fresh(snap, self._diff(snap))
         self._remember(snap)
         self._prev = snap
         self.last_contact = snap.contact
         self.last_is_group = snap.is_group
         return [Message(r.sender, r.text, r.name) for r in new_rows if r.text != NON_TEXT]
+
+    def _fresh(self, snap: Snapshot, new_rows: list[Row]) -> list[Row]:
+        """从 diff 结果里去掉出现过的消息；剩下的太多就当成滑动造成的，一条都不判。然后把整个窗口记为见过。"""
+        seen = self._seen.setdefault(snap.contact, {})
+        start = len(snap.rows) - len(new_rows)          # diff 结果总是窗口的一段后缀
+        fresh = [r for i, r in enumerate(new_rows, start) if not _was_seen(seen, snap.rows, i)]
+        if len(fresh) > BURST:
+            fresh = []
+        for i in range(1, len(snap.rows)):
+            seen.setdefault(snap.rows[i].key, set()).add(snap.rows[i - 1].key)
+        return fresh
 
     # -- diff：找上次快照的尾部在这次快照里的位置，后面的就是新消息 -----------------
 
@@ -318,6 +333,13 @@ class AppSource:
                 return snap.rows[i + 1:]
         # 找不到锚点：列表被大幅滚动或刷新了。保守起见只当作新基线。
         return []
+
+
+def _was_seen(seen: dict[tuple, set], rows: list[Row], i: int) -> bool:
+    """rows[i] 以前出现过没有。连它前一条一起比，同样一句"嗯"接在不同的话后面算不同的消息。"""
+    if i == 0:
+        return False                  # diff 结果前面总有锚点，走不到这里
+    return rows[i - 1].key in seen.get(rows[i].key, ())
 
 
 def merge_window(known: list[Row], window: list[Row], anchor: int = 3) -> tuple[list[Row], int]:

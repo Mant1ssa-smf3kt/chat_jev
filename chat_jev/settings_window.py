@@ -12,6 +12,7 @@ from AppKit import (
     NSApplication,
     NSBackingStoreBuffered,
     NSButton,
+    NSButtonTypeSwitch,
     NSColor,
     NSFont,
     NSMakeRect,
@@ -79,7 +80,7 @@ class SettingsWindow:
         self._target = _Target.alloc().initWithOwner_(self)
         self._env = parse_env(CONFIG_FILE)
 
-        rows = 7
+        rows = 8
         h = PAD * 2 + ROW * rows + 150
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, W, h), NSWindowStyleMaskTitled | NSWindowStyleMaskClosable, NSBackingStoreBuffered, False)
@@ -121,6 +122,13 @@ class SettingsWindow:
         y -= ROW
         self.llm_model = self._field(view, "模型", y, placeholder="claude-opus-5")
         self.llm_model.setStringValue_(self._env.get("LLM_MODEL", ""))
+        y -= ROW + 10
+
+        self.auto_update = NSButton.alloc().initWithFrame_(NSMakeRect(PAD + LABEL_W, y, W - 2 * PAD - LABEL_W, 22))
+        self.auto_update.setButtonType_(NSButtonTypeSwitch)
+        self.auto_update.setTitle_("有新版本时自动更新")
+        self.auto_update.setState_(0 if self._env.get("JEV_AUTO_UPDATE", "1") == "0" else 1)
+        view.addSubview_(self.auto_update)
 
         self.error = self._text(view, "", NSMakeRect(PAD, PAD + 4, W - 2 * PAD - 200, 20), 12)
         self.error.setTextColor_(NSColor.systemRedColor())
@@ -168,6 +176,7 @@ class SettingsWindow:
             "LLM_FLAVOR": FLAVORS[self.flavor.indexOfSelectedItem()][0],
             "LLM_BASE_URL": self.llm_base.stringValue().strip(),
             "LLM_MODEL": self.llm_model.stringValue().strip(),
+            "JEV_AUTO_UPDATE": "1" if self.auto_update.state() else "0",
         }
         try:
             write_env(CONFIG_FILE, values)

@@ -48,7 +48,7 @@ class _MenuTarget(NSObject):
 
 
 class StatusBar:
-    def __init__(self, on_toggle_pause: Callable[[], None], on_show_last: Callable[[], None],
+    def __init__(self, on_toggle_pause: Callable[[], None] | None, on_show_last: Callable[[], None],
                  on_quit: Callable[[], None], verdict_ttl: float = 20.0,
                  extra: list[tuple[str, Callable[[], None]]] | None = None) -> None:
         self.verdict_ttl = verdict_ttl
@@ -73,7 +73,8 @@ class StatusBar:
         self.plan_item = self._add(menu, "", None, enabled=False)
         self.plan_item.setHidden_(True)
         menu.addItem_(NSMenuItem.separatorItem())
-        self.pause_item = self._add(menu, "暂停判别", "togglePause:")
+        self.pause_item = self._add(menu, "暂停自动判别", "togglePause:")
+        self.pause_item.setHidden_(on_toggle_pause is None)      # 没开自动判别就没什么可暂停的
         self._add(menu, "再显示一次上次结果", "showLast:")
         if extra:
             menu.addItem_(NSMenuItem.separatorItem())
@@ -89,7 +90,7 @@ class StatusBar:
         self.status_item.setTitle_(text)
 
     def set_paused(self, paused: bool) -> None:
-        self.pause_item.setTitle_("继续判别" if paused else "暂停判别")
+        self.pause_item.setTitle_("继续自动判别" if paused else "暂停自动判别")
         self._set_title("⏸" if paused else "", None)
 
     def show_verdict(self, v: Verdict, text: str) -> None:

@@ -1,8 +1,8 @@
 """命令行入口：
 
   chat-jev judge "她说的话" --ctx "我: 今晚吃什么" --ctx "她: 随便"     单条判别
-  chat-jev watch --app qq                                              实时监听（浮窗），⌥+点击任意消息判别
-  chat-jev watch --pick-only                                           只判 ⌥+点击选中的消息
+  chat-jev watch --app qq                                              ⌥+点击 QQ 里任意一条消息判别（浮窗）
+  chat-jev watch --auto                                                另外自动判对方新发的消息
   chat-jev watch --source clipboard --no-overlay                       复制即判别（终端输出）
   chat-jev snapshot --app qq                                           打印当前解析到的消息（调试）
   chat-jev dump --app qq                                               打印辅助功能树（适配新版本用）
@@ -110,12 +110,12 @@ def cmd_watch(args, settings) -> int:
             source.poll()          # 建立基线
             print(f"[watch] 当前聊天：{snap.contact or '?'}，已载入 {len(seed)} 条上下文", file=sys.stderr)
     watcher = Watcher(settings, source, _client(settings), history_seed=seed, llm=_llm(settings, args.no_actions),
-                      auto=not args.pick_only)
+                      auto=args.auto)
     watcher.no_actions = args.no_actions
+    if (args.no_overlay or args.no_pick) and not args.auto:
+        print("没有浮窗就不能 ⌥+点击；只剩自动判别的话要加 --auto。", file=sys.stderr)
+        return 2
     if args.no_overlay:
-        if args.pick_only:
-            print("--pick-only 要配合浮窗用（⌥+点击的结果显示在气泡旁边），去掉 --no-overlay。", file=sys.stderr)
-            return 2
         run_terminal(watcher, args.interval)
     else:
         run_gui(watcher, args.interval, args.hide_after, pick=not args.no_pick, waiting_permission=waiting)
@@ -203,7 +203,8 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--interval", type=float, default=1.0, help="轮询间隔秒")
     w.add_argument("--hide-after", type=float, default=8.0, help="浮窗几秒后自动隐藏，0 = 不隐藏")
     w.add_argument("--no-overlay", action="store_true", help="不显示浮窗，只在终端打印（没有 ⌥+点击）")
-    w.add_argument("--pick-only", action="store_true", help="不自动判新消息，只判 ⌥+点击选中的")
+    w.add_argument("--auto", action="store_true", help="自动判对方新发的消息（默认关：只判 ⌥+点击选中的）")
+    w.add_argument("--pick-only", action="store_true", help=argparse.SUPPRESS)   # 旧参数，现在就是默认行为
     w.add_argument("--no-pick", action="store_true", help="关掉 ⌥+点击判别")
     w.add_argument("--no-actions", action="store_true", help="不生成「接下来该怎么做」（配了 LLM_API_KEY 时默认生成）")
     w.set_defaults(fn=cmd_watch)
