@@ -1,4 +1,8 @@
-"""主循环：轮询消息来源 → 对方的新消息交给 Jev → 终端 / 浮窗输出。"""
+"""主循环：轮询消息来源 → 对方的新消息交给 Jev → 终端 / 浮窗输出。
+
+另一个入口是 pick()：用户 ⌥+点击某条消息（哪怕是早就错过、翻回去的），
+用它前面的消息做上下文判别，结果贴在气泡旁边。
+"""
 
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ def format_plan(plan: ActionPlan) -> str:
 class Watcher:
     def __init__(self, settings: Settings, source: Source, client: JevClient, overlay=None,
                  history_seed: list[Message] | None = None, out=sys.stdout, sync: bool = False,
-                 llm=None) -> None:
+                 llm=None, auto: bool = True) -> None:
         self.settings = settings
         self.source = source
         self.client = client
@@ -41,7 +45,10 @@ class Watcher:
         self.overlay = overlay
         self.out = out
         self.sync = sync            # True = 在当前线程直接请求 Jev（测试用）
+        self.auto = auto            # False = 不自动判新消息，只判 ⌥+点击选中的
         self.paused = False         # 暂停时照常记上下文，只是不请求 Jev
+        self._seq = 0               # 每次判别 +1；结果回来时不是最新的一次，就不覆盖浮窗
+        self._cache: dict[tuple, tuple[Verdict, ActionPlan | None]] = {}   # 同一条消息再点一次直接出结果
         self.last: tuple[Verdict, str, ActionPlan | None] | None = None
         self.statusbar = None       # 菜单栏，GUI 模式下由 run_gui 挂上
         # 按聊天对象分别记上下文；剪贴板来源只有一条
@@ -70,15 +77,38 @@ class Watcher:
         hist = self.history[key]
         group = self._is_group()
         for m in new:
-            if m.sender == "them" and not self.paused:
+            if m.sender == "them" and self.auto and not self.paused:
                 self._judge_async(list(hist), m, group)
             hist.append(m)
         self._refresh_status()
 
+    def pick(self, x: float, y: float) -> bool:
+        """⌥+点击：(x, y) 落在某条消息上就判别它，上下文取窗口里它前面的消息。不是消息返回 False。"""
+        hit = self.source.pick(x, y) if hasattr(self.source, "pick") else None
+        if hit is None:
+            return False
+        from .sources.ax import NON_TEXT
+        snap, i = hit
+        row = snap.rows[i]
+        if row.text == NON_TEXT:
+            self._show(lambda o: o.show_info("这条不是文字消息", "图片 / 表情 / 文件判不了", row.frame))
+            return True
+        if row.sender == "me":
+            self._show(lambda o: o.show_info("这条是你自己发的", "点对方的消息试试", row.frame))
+            return True
+        history = [Message(r.sender, r.text, r.name) for r in snap.rows[:i] if r.text != NON_TEXT]
+        target = Message(row.sender, row.text, row.name)
+        self._judge_async(history, target, snap.is_group, anchor=row.frame, contact=snap.contact)
+        return True
+
+    def _show(self, fn) -> None:
+        if self.overlay is not None:
+            fn(self.overlay)
+
     def status_text(self) -> str:
         who = getattr(self.source, "app", self.source.name)
         contact = self._key()
-        state = "已暂停" if self.paused else "监听中"
+        state = "已暂停" if self.paused else ("监听中" if self.auto else "点选模式")
         kind = "群" if self._is_group() else "私聊"
         return f"{state} · {who}" + (f" · {kind} · {contact}" if contact else " · 等待打开聊天")
 
@@ -86,37 +116,59 @@ class Watcher:
         if self.statusbar is not None:
             self.statusbar.set_status(self.status_text())
 
-    def _judge_async(self, history: list[Message], target: Message, group: bool = False) -> None:
-        if self.overlay is not None:
-            self.overlay.show_pending(target.text)
+    def _judge_async(self, history: list[Message], target: Message, group: bool = False,
+                     anchor=None, contact: str | None = None) -> None:
+        self._seq += 1
+        seq = self._seq
+        key = _cache_key(self._key() if contact is None else contact, history, target)
+        shown = f"{target.name}: {target.text}" if target.name else target.text
+        cached = self._cache.get(key)
+        if cached is not None:              # 点过的消息：直接显示，不再请求
+            v, plan = cached
+            self.last = (v, shown, plan)
+            self._show(lambda o: (o.show_verdict(v, shown, anchor), plan and o.show_plan(plan)))
+            if self.statusbar is not None:
+                self.statusbar.show_verdict(v, shown)
+                if plan is not None:
+                    self.statusbar.show_plan(plan)
+            return
+        self._show(lambda o: o.show_pending(target.text, anchor))
         if self.statusbar is not None:
             self.statusbar.show_pending()
+        args = (history, target, group, anchor, seq, key)
         if self.sync:
-            self._judge(history, target, group)
+            self._judge(*args)
         else:
-            threading.Thread(target=self._judge, args=(history, target, group), daemon=True).start()
+            threading.Thread(target=self._judge, args=args, daemon=True).start()
 
-    def _judge(self, history: list[Message], target: Message, group: bool = False) -> None:
+    def _latest(self, seq: int) -> bool:
+        return seq == self._seq
+
+    def _judge(self, history: list[Message], target: Message, group: bool = False,
+               anchor=None, seq: int = 0, key: tuple = ()) -> None:
         try:
             v = judge(self.client, history, target,
                       relation=self.settings.relation, threshold=self.settings.threshold,
                       history_size=self.settings.history_size, group=group)
         except JevError as e:
             print(f"[jev] {e}", file=sys.stderr)
-            if self.overlay is not None:
-                _on_main(lambda: self.overlay.show_error(str(e)[:60], target.text))
+            if self.overlay is not None and self._latest(seq):
+                _on_main(lambda: self.overlay.show_error(str(e)[:60], target.text, anchor))
             return
         print(format_verdict(v, target.text, target.name), file=self.out, flush=True)
         shown = f"{target.name}: {target.text}" if target.name else target.text
-        self.last = (v, shown, None)
-        if self.overlay is not None:
-            _on_main(lambda: self.overlay.show_verdict(v, shown))
-        if self.statusbar is not None:
-            _on_main(lambda: self.statusbar.show_verdict(v, shown))
+        self._cache[key] = (v, None)
+        if self._latest(seq):
+            self.last = (v, shown, None)
+            if self.overlay is not None:
+                _on_main(lambda: self.overlay.show_verdict(v, shown, anchor))
+            if self.statusbar is not None:
+                _on_main(lambda: self.statusbar.show_verdict(v, shown))
         if self.llm is not None:
-            self._plan(history, target, v, group, shown)
+            self._plan(history, target, v, group, shown, seq, key)
 
-    def _plan(self, history: list[Message], target: Message, v: Verdict, group: bool, shown: str) -> None:
+    def _plan(self, history: list[Message], target: Message, v: Verdict, group: bool, shown: str,
+              seq: int = 0, key: tuple = ()) -> None:
         """第二段：LLM 提候选 → Jev 打分布。失败只打日志，不影响已经出的 yes/no。"""
         from .llm import LLMError, propose_actions
         try:
@@ -127,11 +179,19 @@ class Watcher:
             print(f"[plan] {e}", file=sys.stderr)
             return
         print(format_plan(plan), file=self.out, flush=True)
+        self._cache[key] = (v, plan)
+        if not self._latest(seq):
+            return
         self.last = (v, shown, plan)
         if self.overlay is not None:
             _on_main(lambda: self.overlay.show_plan(plan))
         if self.statusbar is not None:
             _on_main(lambda: self.statusbar.show_plan(plan))
+
+
+def _cache_key(contact: str, history: list[Message], target: Message) -> tuple:
+    """同一个聊天里、同样的前三条 + 这一条，就当成同一条消息。"""
+    return (contact, *((m.sender, m.name, m.text) for m in [*history[-3:], target]))
 
 
 def _on_main(fn) -> None:
@@ -156,7 +216,8 @@ def run_terminal(watcher: Watcher, interval: float) -> None:
         pass
 
 
-def run_gui(watcher: Watcher, interval: float, hide_after: float) -> None:
+def run_gui(watcher: Watcher, interval: float, hide_after: float, pick: bool = True,
+            waiting_permission: bool = False) -> None:
     """浮窗 + 菜单栏图标。程序不进 Dock，靠菜单栏图标确认它活着。"""
     from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
     from Foundation import NSTimer
@@ -183,10 +244,24 @@ def run_gui(watcher: Watcher, interval: float, hide_after: float) -> None:
         else:
             watcher.overlay.show_info("还没有判别结果", watcher.status_text())
 
+    from .config import FROZEN
+    extra = []
+    if FROZEN:
+        from .bundle import open_config, open_log
+        extra = [("打开配置文件…", open_config), ("打开日志", open_log)]
     watcher.statusbar = StatusBar(on_toggle_pause=toggle_pause, on_show_last=show_last,
-                                  on_quit=AppHelper.stopEventLoop)
+                                  on_quit=AppHelper.stopEventLoop, extra=extra)
     watcher._refresh_status()
-    watcher.overlay.show_info("chat-jev 已启动", watcher.status_text() + "，结果会显示在这里和菜单栏")
+    if waiting_permission:
+        _wait_for_permission(watcher)
+    else:
+        watcher.overlay.show_info("chat-jev 已启动", watcher.status_text() + "，结果会显示在这里和菜单栏")
+
+    picker = None
+    if pick and hasattr(watcher.source, "pick"):
+        from .picker import ClickPicker
+        picker = ClickPicker(watcher.pick)      # 局部变量撑到事件循环结束，监听不会被回收
+        print("[watch] 按住 ⌥ 点 QQ 里任意一条对方的消息，就在旁边判别它", file=sys.stderr)
 
     NSTimer.scheduledTimerWithTimeInterval_repeats_block_(interval, True, lambda _t: watcher.tick())
     print(f"[watch] source={watcher.source.name} 浮窗模式，每 {interval}s 轮询，菜单栏图标可退出，或 Ctrl-C", file=sys.stderr)
@@ -194,6 +269,28 @@ def run_gui(watcher: Watcher, interval: float, hide_after: float) -> None:
         AppHelper.runEventLoop(installInterrupt=True)
     except KeyboardInterrupt:
         pass
+
+
+def _wait_for_permission(watcher: Watcher) -> None:
+    """没有辅助功能权限时先挂着提示，每 2 秒查一次，打开了就接着干活，不用重启。"""
+    from Foundation import NSTimer
+
+    from . import ax
+    hint = "系统设置 → 隐私与安全性 → 辅助功能，打开 chat-jev"
+    watcher.overlay.hide_after, keep = 0, watcher.overlay.hide_after    # 提示一直挂着
+    watcher.overlay.show_info("需要辅助功能权限", hint)
+    watcher.statusbar.set_status("等待辅助功能权限 · " + hint)
+
+    def check(timer):
+        if not ax.ensure_trusted(prompt=False):
+            return
+        timer.invalidate()
+        watcher.overlay.hide_after = keep
+        watcher.overlay.show_info("已获得权限，开始工作", "打开 QQ 的聊天窗口即可")
+        watcher._refresh_status()
+        print("[watch] 已获得辅助功能权限", file=sys.stderr)
+
+    NSTimer.scheduledTimerWithTimeInterval_repeats_block_(2.0, True, check)
 
 
 run_overlay = run_gui

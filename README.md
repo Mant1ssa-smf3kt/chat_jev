@@ -1,9 +1,9 @@
 # chat-jev
 
-盯着桌面微信 / QQ 的聊天窗口，对方每发来一句话，就用 [Jev](https://typesafe.ai)（TypeSafe AI 的判别模型）判断：
+盯着桌面 QQ 的聊天窗口，对方每发来一句话，就用 [Jev](https://typesafe.ai)（TypeSafe AI 的判别模型）判断：
 **她想表达的意思是不是这句话的字面意思？** 表里一致 → `YES`，话里有话 → `NO`，顺带给出最可能的真实意图。
 
-结果显示在屏幕右上角的浮窗里，也会打印在终端。程序不进 Dock，靠**菜单栏图标**（💬 气泡）确认它在跑：
+结果显示在屏幕右上角的浮窗里；错过的旧消息，**按住 ⌥ 点一下**就在气泡旁边判。程序不进 Dock，靠**菜单栏图标**（💬 气泡）确认它在跑：
 图标旁会短暂显示最近一次的 YES / NO，点开菜单能看到正在盯哪个聊天、暂停 / 继续、退出。
 
 ```
@@ -18,12 +18,46 @@ YES 表里一致  94%                  |  好呀，那我们七点在老地方�
 | 应用 | 读取方式 | 需要的权限 |
 |---|---|---|
 | QQ (NT 版, Electron) | macOS 辅助功能树。DOM class 直接标出自己/对方 | 辅助功能 |
-| 微信 4.x | 截窗口图 + 系统 Vision OCR（离线）。气泡在左=对方，在右=我 | 屏幕录制 |
 | 任何应用 | 剪贴板：复制一句话就判别 | 无 |
 
-判别只把**文字**发给 Jev（最近 12 条上下文 + 待判断的这条），截图不出本机。
+判别只把**文字**发给 Jev（最近 12 条上下文 + 待判断的这条）。
 
-## 安装
+> 微信已放弃：4.x 是自绘界面，辅助功能树是空的，截图 OCR 又太不稳定。微信里的话可以用剪贴板来源判。
+
+## 安装（app，推荐）
+
+1. 到 [Releases](https://github.com/Mant1ssa-smf3kt/chat_jev/releases) 下载 `chat-jev-<版本>-macos-arm64.zip`，解压，把 `chat-jev.app` 拖进「应用程序」。
+   目前只有 Apple 芯片版，需要 macOS 14+。
+2. app 没有经过 Apple 公证，第一次打开会被拦下。任选一种放行：
+   - 双击被拦后，到 系统设置 → 隐私与安全性，页面底部点「仍要打开」
+   - 或者在终端执行一次 `xattr -dr com.apple.quarantine /Applications/chat-jev.app`
+3. 第一次打开会生成配置文件并提示你填密钥：
+   `~/Library/Application Support/chat-jev/.env`，填上 `AI_GATEWAY_API_KEY`（或 `TYPESAFE_API_KEY`），保存后再打开 chat-jev。
+   其它设置和下文的环境变量同名，都写在这个文件里。**app 读不到 shell 里 export 的变量**，只认这个文件。
+4. 系统会请求「辅助功能」权限：系统设置 → 隐私与安全性 → 辅助功能，打开 **chat-jev**。
+   授权后不用重启，浮窗会提示「已获得权限」。
+
+之后打开 QQ 的聊天窗口就行。菜单栏图标里可以暂停、打开配置文件、打开日志（`~/Library/Logs/chat-jev.log`）、退出。
+
+想改 app 的默认行为，在配置文件里加一行，写法和命令行参数一样：
+
+```bash
+JEV_WATCH_ARGS="--pick-only --interval 0.5"     # 只判点选的消息、读得勤一些
+```
+
+### 权限只给 chat-jev，不给终端
+
+app 是独立的程序，辅助功能权限记在 chat-jev 名下。**终端不需要任何权限**，
+以前给 Terminal / iTerm / Ghostty 开过的可以关掉：系统设置 → 隐私与安全性 → 辅助功能，把终端的开关关掉或用「−」删掉。
+（整项清空可以用 `tccutil reset Accessibility <终端的 bundle id>`，比如 Ghostty 是 `com.mitchellh.ghostty`。）
+
+chat-jev 只要「辅助功能」这一项：读 QQ 窗口的消息列表，以及看 ⌥+点击点在哪条消息上。
+它不需要屏幕录制、输入监控、完全磁盘访问。
+
+**更新版本后要重新授权**：app 用的是 ad-hoc 签名，系统按签名记权限，新版本对系统来说是另一个程序。
+在辅助功能列表里把旧的 chat-jev 用「−」删掉，再打开新版，按提示重新开一次。
+
+## 从源码运行（开发）
 
 ```bash
 cd chat_jev
@@ -33,7 +67,12 @@ cp .env.example .env    # 填 AI_GATEWAY_API_KEY（或 TYPESAFE_API_KEY）
 
 需要 macOS 14+、Python 3.13、[uv](https://docs.astral.sh/uv/)。
 
-## 用法
+注意：从终端跑 `watch` / `snapshot` / `dump` 时，系统把辅助功能权限算在**终端**头上，
+得给终端授权才能读到 QQ。只想让 chat-jev 拿权限，就用 app；`judge` 单句判别不需要任何权限。
+
+## 命令行用法
+
+app 做的就是 `watch --app qq`。下面这些是从源码跑的命令：
 
 ```bash
 # 单句判别（带上下文）
@@ -42,8 +81,11 @@ uv run chat-jev judge "没事，你忙吧" --ctx "我: 今晚加班，不能陪�
 # 实时监听 QQ（浮窗）
 uv run chat-jev watch --app qq
 
-# 实时监听微信，只看某个人
-uv run chat-jev watch --app wechat --contact 她的昵称
+# 实时监听 QQ，只看某个人
+uv run chat-jev watch --app qq --contact 她的昵称
+
+# 不自动判新消息，只判 ⌥+点击选中的
+uv run chat-jev watch --pick-only
 
 # 不要浮窗，只打终端
 uv run chat-jev watch --app qq --no-overlay
@@ -52,15 +94,24 @@ uv run chat-jev watch --app qq --no-overlay
 uv run chat-jev watch --source clipboard
 
 # 调试：看看现在解析出了什么
-uv run chat-jev snapshot --app wechat --boxes --save /tmp/wx.png
+uv run chat-jev snapshot --app qq --frames
 uv run chat-jev dump --app qq | less
 ```
 
-第一次运行会弹系统权限请求。**权限是给启动它的终端的**（Terminal / iTerm / Ghostty…），
-授权后要重开终端再跑。
-
 `watch` 启动时浮窗会弹一下"chat-jev 已启动"，菜单栏出现气泡图标。它会把当前窗口里已有的消息载入作为上下文，之后只判别**对方新发的**消息，
 自己发的只记进上下文。切换聊天对象时上下文分开记。
+
+### ⌥+点击：判任意一条消息
+
+错过了、或者是启动之前的消息：在 QQ 里翻回去，**按住 Option 点一下那条消息**，
+结果就显示在那个气泡旁边。上下文用它**前面**的消息，不带后面的（包括你往上翻时经过的，见下方「局限」）。
+
+- 点同一条消息第二次，直接显示上次的结果，不重复请求
+- 点到自己的消息、图片或表情，会提示判不了
+- 只是旁听点击，不拦截：点击照常送到 QQ
+- 连着点了好几条时，浮窗只显示最后点的那条，前面几条的结果照样打印在终端
+- 要浮窗模式才能用（`--no-overlay` 下没有），`--no-pick` 关掉
+- 点了没反应：用 `snapshot --frames` 看每条消息的屏幕坐标对不对
 
 ## API 接口
 
@@ -109,7 +160,7 @@ uv run chat-jev judge "没事，你忙吧" --ctx "我: 今晚加班"
 #     → 建议：先哄一句再解释 62%  (承认没陪到她，再说加班的事)
 #       其他：直接问她是不是不高兴 21%，先不回晚点打电话 17%
 
-uv run chat-jev watch --app wechat      # 浮窗和菜单栏多一行"建议"
+uv run chat-jev watch --app qq          # 浮窗和菜单栏多一行"建议"
 ```
 
 LLM 的接入留给你自己填，在 `.env`：
@@ -142,31 +193,24 @@ LLM 这一步失败（没配 key、超时、返回格式不对）只会少一行
 | `JEV_RELATION` | `女朋友` | 对方和你的关系，写进背景 |
 | `JEV_HISTORY` | `12` | 每次带多少条上下文 |
 
-## 微信 OCR 布局
-
-默认按 880×640 的默认窗口标定，单位 pt、相对窗口左上角：
-
-| 变量 | 默认 | 含义 |
-|---|---|---|
-| `JEV_WECHAT_CHAT_LEFT` | 300 | 聊天区左边界（左边是会话列表） |
-| `JEV_WECHAT_HEADER` | 60 | 顶部标题栏高度 |
-| `JEV_WECHAT_FOOTER` | 170 | 底部输入区高度。拉高了输入框就调大，否则你正在打的字会被当消息 |
-| `JEV_WECHAT_EDGE` | 110 | 气泡贴左/右边多少 pt 以内算对方/自己 |
-
-判错了用 `snapshot --app wechat --boxes --save x.png` 看坐标再调。
-
 ## 局限
 
-- 微信靠 OCR：字识别偶有错字（如 `llm`→`Im`），图片/表情/语音消息读不到；窗口要在屏幕上（可以被遮挡，不能最小化）。
 - QQ 靠辅助功能：QQ 大版本更新改了 DOM class 就要跟着改 `QQAdapter`，用 `dump --app qq` 看新结构。
-- 只判文字。同一条消息不重复判；撤回的消息不处理。
+- 只判文字。自动模式下同一条消息不重复判；撤回的消息不处理。
+- QQ 的消息列表是虚拟滚动，一次只渲染十几条（`snapshot` 也只能看到这些）。`watch` 运行期间会把每次读到的
+  片段拼成完整记录，所以**往上翻过的消息都会留作上下文**；但启动后没翻到过的更早消息拿不到。
+  翻得太快、两次读取之间没有重叠时，记录会从当前这段重新开始，可以用 `--interval 0.5` 读得更勤一些。
 - 判断只是概率参考。别真拿它替你读心。
 
 ## 开发
 
 ```bash
 uv run pytest
+packaging/build.sh      # 打包：dist/chat-jev.app 和 dist/chat-jev-<版本>-macos-<架构>.zip
 ```
+
+版本号在 `pyproject.toml`。打包用 PyInstaller（配置在 `packaging/chat-jev.spec`），
+脚本最后会用 `CHAT_JEV_SELFTEST=1` 跑一遍打出来的 app，确认模块都在、不弹权限框。
 
 结构：
 
@@ -177,12 +221,12 @@ chat_jev/
   llm.py          文本 LLM：提"下一步"候选（换 provider 改 LLMClient.complete）
   config.py       环境变量 / .env
   ax.py           辅助功能 API 封装
-  capture.py      窗口截图 + Vision OCR
   sources/
     ax.py         AppSource：轮询 + diff；QQAdapter；GenericAdapter
-    ocr.py        OCRAdapter（微信）
     clipboard.py  剪贴板来源
   overlay.py      浮窗
+  picker.py       ⌥+点击的全局鼠标监听
+  bundle.py       app 入口：日志、配置文件、缺密钥提示
   menubar.py      菜单栏图标 + 菜单
   app.py          Watcher 主循环
   cli.py          命令行

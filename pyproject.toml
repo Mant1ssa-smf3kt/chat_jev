@@ -1,15 +1,12 @@
 [project]
 name = "chat-jev"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.13"
 dependencies = [
     "anthropic>=1.7.0",
     "httpx>=0.28.1",
     "pyobjc-framework-applicationservices>=12.2.2",
     "pyobjc-framework-cocoa>=12.2.2",
-    "pyobjc-framework-quartz>=12.2.2",
-    "pyobjc-framework-screencapturekit>=12.2.2",
-    "pyobjc-framework-vision>=12.2.2",
 ]
 
 [project.scripts]
@@ -24,5 +21,6 @@ packages = ["chat_jev"]
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6.22.3",
     "pytest>=9.1.1",
 ]

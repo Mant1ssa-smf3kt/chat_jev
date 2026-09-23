@@ -1,4 +1,8 @@
-"""配置：全部来自环境变量，可选从项目根目录的 .env 读取。
+"""配置：全部来自环境变量，可选从 .env 读取。
+
+.env 按顺序找两处，先找到的值优先：
+    ~/Library/Application Support/chat-jev/.env   打包成 app 后用这个（app 读不到 shell 里的环境变量）
+    项目根目录/.env                                从源码跑时用这个
 
 后端切换只需要改三个值：
 
@@ -10,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,9 +39,18 @@ BACKENDS = {
 }
 
 
+CONFIG_DIR = Path.home() / "Library" / "Application Support" / "chat-jev"
+CONFIG_FILE = CONFIG_DIR / ".env"
+FROZEN = getattr(sys, "frozen", False)     # 在打包好的 .app 里运行
+
+
 def load_dotenv(path: Path | None = None) -> None:
     """极简 .env 读取：KEY=VALUE，一行一个，不覆盖已有环境变量。"""
-    path = path or Path(__file__).resolve().parent.parent / ".env"
+    if path is None:
+        load_dotenv(CONFIG_FILE)
+        if not FROZEN:
+            load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+        return
     if not path.is_file():
         return
     for line in path.read_text(encoding="utf-8").splitlines():

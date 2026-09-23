@@ -54,3 +54,33 @@ def test_anchor_missing_emits_nothing():
 def test_rfind_subseq():
     assert _rfind_subseq([1, 2, 3, 2, 3], [2, 3]) == 3
     assert _rfind_subseq([1, 2], [3]) is None
+
+
+def test_row_at_uses_band_and_list_area():
+    from chat_jev.sources.ax import Snapshot
+    rows = [Row("me", "", "a", band=(100, 140)), Row("them", "", "b", band=(140, 200))]
+    snap = Snapshot("A", rows, area=(300, 80, 500, 600))
+    assert snap.row_at(400, 120) == 0
+    assert snap.row_at(700, 150) == 1
+    assert snap.row_at(100, 150) is None          # 在会话列表那一侧，不在消息区
+    assert snap.row_at(400, 500) is None          # 消息区空白处
+
+
+def test_merge_window_scroll_up_down_and_new():
+    from chat_jev.sources.ax import merge_window
+    rows = [R("them", str(i)) for i in range(30)]
+    known, off = merge_window([], rows[15:30])
+    assert off == 0
+    known, off = merge_window(known, rows[8:22])          # 往上翻：前面接上更早的
+    assert [r.text for r in known] == [str(i) for i in range(8, 30)] and off == 0
+    known, off = merge_window(known, rows[10:24])         # 在中间
+    assert len(known) == 22 and off == 2
+    more = rows + [R("them", "30")]
+    known, off = merge_window(known, more[20:31])          # 底部来了新消息
+    assert known[-1].text == "30" and len(known) == 23 and off == 12
+
+
+def test_merge_window_no_overlap_restarts():
+    from chat_jev.sources.ax import merge_window
+    known, _ = merge_window([R("me", "a"), R("me", "b")], [R("them", "x"), R("them", "y")])
+    assert [r.text for r in known] == ["x", "y"]

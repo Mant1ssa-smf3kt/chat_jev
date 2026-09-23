@@ -43,10 +43,14 @@ class _MenuTarget(NSObject):
     def quit_(self, sender):
         self._callbacks["quit"]()
 
+    def runExtra_(self, sender):
+        self._callbacks["extra"][sender.tag()]()
+
 
 class StatusBar:
     def __init__(self, on_toggle_pause: Callable[[], None], on_show_last: Callable[[], None],
-                 on_quit: Callable[[], None], verdict_ttl: float = 20.0) -> None:
+                 on_quit: Callable[[], None], verdict_ttl: float = 20.0,
+                 extra: list[tuple[str, Callable[[], None]]] | None = None) -> None:
         self.verdict_ttl = verdict_ttl
         self._timer: NSTimer | None = None
 
@@ -60,7 +64,8 @@ class StatusBar:
         button.setToolTip_("chat-jev：判别对方的话是不是字面意思")
 
         self._target = _MenuTarget.alloc().initWithCallbacks_(
-            {"toggle_pause": on_toggle_pause, "show_last": on_show_last, "quit": on_quit})
+            {"toggle_pause": on_toggle_pause, "show_last": on_show_last, "quit": on_quit,
+             "extra": [fn for _, fn in extra or []]})
 
         menu = NSMenu.alloc().init()
         self.status_item = self._add(menu, "启动中…", None, enabled=False)
@@ -70,6 +75,10 @@ class StatusBar:
         menu.addItem_(NSMenuItem.separatorItem())
         self.pause_item = self._add(menu, "暂停判别", "togglePause:")
         self._add(menu, "再显示一次上次结果", "showLast:")
+        if extra:
+            menu.addItem_(NSMenuItem.separatorItem())
+            for i, (title, _) in enumerate(extra):
+                self._add(menu, title, "runExtra:").setTag_(i)
         menu.addItem_(NSMenuItem.separatorItem())
         self._add(menu, "退出 chat-jev", "quit:", key="q")
         self.item.setMenu_(menu)

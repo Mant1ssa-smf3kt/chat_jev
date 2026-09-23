@@ -28,7 +28,7 @@ class FakeAdapter:
 def make_source(frames):
     src = AppSource.__new__(AppSource)
     src.app, src.adapter, src.contact, src.only_when_frontmost = "fake", FakeAdapter(frames), None, False
-    src._prev, src.last_contact = None, ""
+    src._prev, src.last_contact, src.transcripts = None, "", {}
     src._attach = lambda: True          # 跳过真实进程查找
     return src
 
@@ -146,3 +146,65 @@ def test_llm_failure_keeps_verdict():
                 llm=FakeLLM("这不是 JSON"))
     src.poll(); w.tick()
     assert out.getvalue().startswith("YES") and "建议" not in out.getvalue()
+
+
+class PickSource:
+    """只实现 pick：点哪儿都返回固定快照的第 i 行。"""
+    name, app, last_contact, last_is_group = "fake", "fake", "她", False
+
+    def __init__(self, snap, i):
+        self.hit = (snap, i) if i is not None else None
+
+    def poll(self):
+        return []
+
+    def pick(self, x, y):
+        return self.hit
+
+
+def _verdict_handler(calls):
+    def handler(req):
+        calls.append(json.loads(req.content))
+        return httpx.Response(200, json={"answers": {
+            "literal": {"type": "noul", "noul": 0.2},
+            "intent": {"type": "choice", "choice": "反话赌气", "probabilities": {"反话赌气": 0.8}}}})
+    return handler
+
+
+def test_pick_judges_old_message_with_preceding_context():
+    calls = []
+    rows = [Row("me", "", "今晚加班"), Row("them", "", "没事，你忙吧"), Row("me", "", "别生气"), Row("them", "", "嗯")]
+    w = Watcher(settings(), PickSource(Snapshot("她", rows), 1), JevClient("k", transport=httpx.MockTransport(_verdict_handler(calls))),
+                out=io.StringIO(), sync=True, auto=False)
+    assert w.pick(0, 0)
+    state = calls[0]["state"]
+    assert state["待判断消息"]["内容"] == "没事，你忙吧"
+    assert [m["内容"] for m in state["历史消息"]] == ["今晚加班"]      # 只带它前面的，不带后面的
+
+
+def test_pick_same_message_twice_uses_cache():
+    calls = []
+    rows = [Row("me", "", "今晚加班"), Row("them", "", "没事，你忙吧")]
+    w = Watcher(settings(), PickSource(Snapshot("她", rows), 1), JevClient("k", transport=httpx.MockTransport(_verdict_handler(calls))),
+                out=io.StringIO(), sync=True)
+    w.pick(0, 0); w.pick(0, 0)
+    assert len(calls) == 1 and w.last[0].intent == "反话赌气"
+
+
+def test_pick_own_message_or_blank_does_not_call_jev():
+    calls = []
+    client = JevClient("k", transport=httpx.MockTransport(_verdict_handler(calls)))
+    rows = [Row("me", "", "今晚加班")]
+    assert Watcher(settings(), PickSource(Snapshot("她", rows), 0), client, out=io.StringIO(), sync=True).pick(0, 0)
+    assert not Watcher(settings(), PickSource(Snapshot("她", rows), None), client, out=io.StringIO(), sync=True).pick(0, 0)
+    assert calls == []
+
+
+def test_pick_only_mode_skips_new_messages():
+    calls = []
+    base = [Row("me", "", "hi")]
+    src = make_source([Snapshot("她", base), Snapshot("她", base + [Row("them", "", "好")])])
+    w = Watcher(settings(), src, JevClient("k", transport=httpx.MockTransport(_verdict_handler(calls))),
+                out=io.StringIO(), sync=True, auto=False)
+    src.poll(); w.tick()
+    assert calls == [] and list(w.history["她"])[-1].text == "好"     # 不判，但照样记上下文

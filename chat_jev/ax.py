@@ -7,6 +7,9 @@ from typing import Any, Iterator
 from AppKit import NSRunningApplication, NSWorkspace
 from ApplicationServices import (
     AXIsProcessTrusted,
+    AXUIElementCopyElementAtPosition,
+    AXUIElementCreateSystemWide,
+    AXUIElementGetPid,
     AXIsProcessTrustedWithOptions,
     AXUIElementCopyAttributeValue,
     AXUIElementCreateApplication,
@@ -89,6 +92,21 @@ def size(el: Any) -> tuple[float, float] | None:
         return None
     ok, s = AXValueGetValue(v, kAXValueCGSizeType, None)
     return (s.width, s.height) if ok else None
+
+
+def frame(el: Any) -> tuple[float, float, float, float] | None:
+    """(x, y, w, h)，辅助功能坐标：原点在主屏左上角，y 向下。"""
+    p, s = position(el), size(el)
+    return (p[0], p[1], s[0], s[1]) if p and s else None
+
+
+def pid_at(x: float, y: float) -> int | None:
+    """屏幕上 (x, y) 处是哪个进程的窗口。"""
+    err, el = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), x, y, None)
+    if err != kAXErrorSuccess or el is None:
+        return None
+    err, pid = AXUIElementGetPid(el, None)
+    return pid if err == kAXErrorSuccess else None
 
 
 def walk(el: Any, max_depth: int = 60) -> Iterator[tuple[Any, int]]:
