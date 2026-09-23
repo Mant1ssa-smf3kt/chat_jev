@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,15 +45,11 @@ CONFIG_FILE = CONFIG_DIR / ".env"
 FROZEN = getattr(sys, "frozen", False)     # 在打包好的 .app 里运行
 
 
-def load_dotenv(path: Path | None = None) -> None:
-    """极简 .env 读取：KEY=VALUE，一行一个，不覆盖已有环境变量。"""
-    if path is None:
-        load_dotenv(CONFIG_FILE)
-        if not FROZEN:
-            load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-        return
+def parse_env(path: Path) -> dict[str, str]:
+    """极简 .env 解析：KEY=VALUE，一行一个；空值也返回（调用方决定怎么处理）。"""
+    out: dict[str, str] = {}
     if not path.is_file():
-        return
+        return out
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -63,8 +60,59 @@ def load_dotenv(path: Path | None = None) -> None:
             value = value[1:-1]                      # 带引号：原样取
         else:
             value = value.split(" #", 1)[0].split("\t#", 1)[0].strip()   # 不带引号：去行内注释
-        if value:
+        out[key] = value
+    return out
+
+
+def load_dotenv(path: Path | None = None, override: bool = False) -> None:
+    """把 .env 读进环境变量。默认不覆盖已有的；override=True 用于设置窗口保存后重新加载。"""
+    if path is None:
+        load_dotenv(CONFIG_FILE, override)
+        if not FROZEN:
+            load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+        return
+    for key, value in parse_env(path).items():
+        if override:
+            if value:
+                os.environ[key] = value
+            else:
+                os.environ.pop(key, None)            # 在设置里清空了，就真的清掉
+        elif value:
             os.environ.setdefault(key, value)        # 空值不写入，免得盖掉 shell 里的
+
+
+_LINE = re.compile(r"^(\s*#\s*)?([A-Z_][A-Z0-9_]*)\s*=(.*)$")
+
+
+def write_env(path: Path, values: dict[str, str]) -> None:
+    """就地更新 .env 里的这些键，保留其它行、注释和顺序；没有的追加到末尾。文件权限设成只有自己可读。
+
+    被注释掉的模板行（# KEY=...）只有在要写非空值时才启用。
+    """
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    done: set[str] = set()
+    for i, line in enumerate(lines):
+        m = _LINE.match(line)
+        if not m or m.group(2) not in values or m.group(2) in done:
+            continue
+        commented, key, rest = m.groups()
+        value = values[key]
+        if commented and not value:
+            continue
+        tail = ""
+        if not commented and rest.strip()[:1] not in ("'", '"'):
+            c = re.search(r"\s+#.*$", rest)
+            tail = c.group(0) if c else ""           # 保留行内注释
+        lines[i] = f"{key}={_quote(value)}{tail}"
+        done.add(key)
+    lines += [f"{k}={_quote(v)}" for k, v in values.items() if k not in done and v]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+
+
+def _quote(value: str) -> str:
+    return f'"{value}"' if re.search(r"[\s#'\"]", value) else value
 
 
 @dataclass(frozen=True)
@@ -93,8 +141,8 @@ class Settings:
         return "vercel-native" if self.backend == "vercel-native" else "typesafe"
 
 
-def load_settings() -> Settings:
-    load_dotenv()
+def load_settings(override: bool = False) -> Settings:
+    load_dotenv(override=override)
     backend = os.environ.get("JEV_BACKEND", "vercel")
     preset = BACKENDS.get(backend)
     if preset is None:

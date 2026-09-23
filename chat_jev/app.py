@@ -46,6 +46,7 @@ class Watcher:
         self.out = out
         self.sync = sync            # True = 在当前线程直接请求 Jev（测试用）
         self.auto = auto            # False = 不自动判新消息，只判 ⌥+点击选中的
+        self.no_actions = False     # 用户关掉了「下一步建议」；设置里改 key 后重建客户端时也要尊重
         self.paused = False         # 暂停时照常记上下文，只是不请求 Jev
         self._seq = 0               # 每次判别 +1；结果回来时不是最新的一次，就不覆盖浮窗
         self._cache: dict[tuple, tuple[Verdict, ActionPlan | None]] = {}   # 同一条消息再点一次直接出结果
@@ -100,6 +101,17 @@ class Watcher:
         target = Message(row.sender, row.text, row.name)
         self._judge_async(history, target, snap.is_group, anchor=row.frame, contact=snap.contact)
         return True
+
+    def reconfigure(self) -> None:
+        """设置窗口保存后：重新读配置、换掉 Jev / LLM 客户端，缓存的结果作废。"""
+        from .cli import _client, _llm
+        from .config import load_settings
+        self.settings = load_settings(override=True)
+        self.client = _client(self.settings)
+        self.llm = _llm(self.settings, self.no_actions)
+        self._cache.clear()
+        self._show(lambda o: o.show_info("设置已保存", "接下来的判别用新配置"))
+        print("[settings] 已重新加载配置", file=sys.stderr)
 
     def _show(self, fn) -> None:
         if self.overlay is not None:
@@ -245,10 +257,11 @@ def run_gui(watcher: Watcher, interval: float, hide_after: float, pick: bool = T
             watcher.overlay.show_info("还没有判别结果", watcher.status_text())
 
     from .config import FROZEN
-    extra = []
+    from .settings_window import open_settings
+    extra = [("设置…", lambda: open_settings(on_saved=watcher.reconfigure))]
     if FROZEN:
         from .bundle import open_config, open_log
-        extra = [("打开配置文件…", open_config), ("打开日志", open_log)]
+        extra += [("打开配置文件…", open_config), ("打开日志", open_log)]
     watcher.statusbar = StatusBar(on_toggle_pause=toggle_pause, on_show_last=show_last,
                                   on_quit=AppHelper.stopEventLoop, extra=extra)
     watcher._refresh_status()

@@ -1,6 +1,6 @@
 [project]
 name = "chat-jev"
-version = "0.2.0"
+version = "0.3.0"
 requires-python = ">=3.13"
 dependencies = [
     "anthropic>=1.7.0",

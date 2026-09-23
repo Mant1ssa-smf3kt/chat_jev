@@ -111,6 +111,7 @@ def cmd_watch(args, settings) -> int:
             print(f"[watch] 当前聊天：{snap.contact or '?'}，已载入 {len(seed)} 条上下文", file=sys.stderr)
     watcher = Watcher(settings, source, _client(settings), history_seed=seed, llm=_llm(settings, args.no_actions),
                       auto=not args.pick_only)
+    watcher.no_actions = args.no_actions
     if args.no_overlay:
         if args.pick_only:
             print("--pick-only 要配合浮窗用（⌥+点击的结果显示在气泡旁边），去掉 --no-overlay。", file=sys.stderr)
@@ -119,6 +120,19 @@ def cmd_watch(args, settings) -> int:
     else:
         run_gui(watcher, args.interval, args.hide_after, pick=not args.no_pick, waiting_permission=waiting)
     return 0
+
+
+def cmd_setup(args, settings) -> int:
+    """单独打开设置窗口（写到 app 用的那份配置，从源码跑时也优先读它）。"""
+    from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+    from .config import CONFIG_FILE
+    from .settings_window import SettingsWindow
+    NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    if SettingsWindow().run_modal():
+        print(f"已保存到 {CONFIG_FILE}")
+        return 0
+    return 1
 
 
 def cmd_snapshot(args, settings) -> int:
@@ -193,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--no-pick", action="store_true", help="关掉 ⌥+点击判别")
     w.add_argument("--no-actions", action="store_true", help="不生成「接下来该怎么做」（配了 LLM_API_KEY 时默认生成）")
     w.set_defaults(fn=cmd_watch)
+
+    sub.add_parser("setup", help="打开设置窗口，填 API key 等").set_defaults(fn=cmd_setup)
 
     s = sub.add_parser("snapshot", help="打印当前解析到的消息（调试 / 校准布局）")
     s.add_argument("--app", default="qq")

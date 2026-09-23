@@ -33,6 +33,7 @@ def ensure_config() -> None:
     if not CONFIG_FILE.exists():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(_template(), encoding="utf-8")
+        CONFIG_FILE.chmod(0o600)                 # 里面是密钥，只给自己读
 
 
 def open_config() -> None:
@@ -44,24 +45,11 @@ def open_log() -> None:
     subprocess.run(["open", "-a", "Console", str(LOG_FILE)], check=False)
 
 
-def _alert(title: str, text: str, buttons: list[str]) -> int:
-    """弹一个系统对话框，返回按了第几个按钮（从 0 起）。"""
-    from AppKit import NSAlert, NSApplication, NSApplicationActivationPolicyAccessory
-    app = NSApplication.sharedApplication()
-    app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
-    app.activateIgnoringOtherApps_(True)
-    alert = NSAlert.alloc().init()
-    alert.setMessageText_(title)
-    alert.setInformativeText_(text)
-    for b in buttons:
-        alert.addButtonWithTitle_(b)
-    return int(alert.runModal()) - 1000          # NSAlertFirstButtonReturn = 1000
-
-
 def selftest() -> int:
     """打包脚本用：确认冻结后的 app 能导入全部模块、读到配置模板，不弹任何权限框。"""
     import importlib
-    for mod in ("app", "ax", "cli", "jev", "judge", "llm", "menubar", "overlay", "picker", "sources.ax", "sources.clipboard"):
+    for mod in ("app", "ax", "cli", "jev", "judge", "llm", "menubar", "overlay", "picker", "settings_window",
+                "sources.ax", "sources.clipboard"):
         importlib.import_module(f"chat_jev.{mod}")
     assert "AI_GATEWAY_API_KEY" in _template(), "没打包进 .env.example"
     print("selftest ok")
@@ -75,11 +63,13 @@ def main() -> int:
     ensure_config()
     load_dotenv()
     if not load_settings().api_key:
-        if _alert("chat-jev 还没配置密钥",
-                  f"在配置文件里填上 AI_GATEWAY_API_KEY（或 TYPESAFE_API_KEY），保存后重新打开 chat-jev。\n\n{CONFIG_FILE}",
-                  ["打开配置文件", "退出"]) == 0:
-            open_config()
-        return 1
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+        from .settings_window import SettingsWindow
+        NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        if not SettingsWindow(first_run=True).run_modal():
+            return 1                                 # 点了退出
+        load_settings(override=True)
     from .cli import main as cli_main
     # 想改默认行为（只判点选、只看某个人……）就在配置里写 JEV_WATCH_ARGS="--pick-only --interval 0.5"
     extra = shlex.split(os.environ.get("JEV_WATCH_ARGS", ""))

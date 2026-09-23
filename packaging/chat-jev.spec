@@ -21,6 +21,7 @@ app = BUNDLE(
     coll,
     name="chat-jev.app",
     bundle_identifier="io.github.mant1ssa.chat-jev",
+    icon=os.path.join(ROOT, "build", "chat-jev.icns"),
     version=VERSION,
     info_plist={
         "CFBundleName": "chat-jev",

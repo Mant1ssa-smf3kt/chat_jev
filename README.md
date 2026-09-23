@@ -26,20 +26,21 @@ YES 表里一致  94%                  |  好呀，那我们七点在老地方�
 
 ## 安装（app，推荐）
 
-1. 到 [Releases](https://github.com/Mant1ssa-smf3kt/chat_jev/releases) 下载 `chat-jev-<版本>-macos-arm64.zip`，解压，把 `chat-jev.app` 拖进「应用程序」。
-   目前只有 Apple 芯片版，需要 macOS 14+。
+1. 到 [Releases](https://github.com/Mant1ssa-smf3kt/chat_jev/releases) 下载 `chat-jev-<版本>-macos-arm64.dmg`，
+   双击打开，把 `chat-jev` 拖到旁边的「应用程序」上。目前只有 Apple 芯片版，需要 macOS 14+。
 2. app 没有经过 Apple 公证，第一次打开会被拦下。任选一种放行：
    - 双击被拦后，到 系统设置 → 隐私与安全性，页面底部点「仍要打开」
    - 或者在终端执行一次 `xattr -dr com.apple.quarantine /Applications/chat-jev.app`
-3. 第一次打开会生成配置文件并提示你填密钥：
-   `~/Library/Application Support/chat-jev/.env`，填上 `AI_GATEWAY_API_KEY`（或 `TYPESAFE_API_KEY`），保存后再打开 chat-jev。
-   其它设置和下文的环境变量同名，都写在这个文件里。**app 读不到 shell 里 export 的变量**，只认这个文件。
+3. 第一次打开会弹出**设置窗口**：选接入方式（Vercel AI Gateway / TypeSafe 直连），粘贴 Jev 的 API key，点保存。
+   「下一步建议」要的 LLM key 可以留空，以后再填。之后随时可以从菜单栏图标 →「设置…」改，保存后立即生效。
 4. 系统会请求「辅助功能」权限：系统设置 → 隐私与安全性 → 辅助功能，打开 **chat-jev**。
    授权后不用重启，浮窗会提示「已获得权限」。
 
-之后打开 QQ 的聊天窗口就行。菜单栏图标里可以暂停、打开配置文件、打开日志（`~/Library/Logs/chat-jev.log`）、退出。
+之后打开 QQ 的聊天窗口就行。菜单栏图标里可以暂停、打开设置、打开配置文件、打开日志（`~/Library/Logs/chat-jev.log`）、退出。
 
-想改 app 的默认行为，在配置文件里加一行，写法和命令行参数一样：
+设置保存在 `~/Library/Application Support/chat-jev/.env`（权限 600，只有你自己能读）。
+设置窗口里没有的选项（阈值、上下文条数……）直接编辑这个文件，变量名和下文一致。
+**app 读不到 shell 里 export 的变量**，只认这个文件。想改 app 的默认行为，也在这里加一行，写法和命令行参数一样：
 
 ```bash
 JEV_WATCH_ARGS="--pick-only --interval 0.5"     # 只判点选的消息、读得勤一些
@@ -66,6 +67,8 @@ cp .env.example .env    # 填 AI_GATEWAY_API_KEY（或 TYPESAFE_API_KEY）
 ```
 
 需要 macOS 14+、Python 3.13、[uv](https://docs.astral.sh/uv/)。
+也可以用 `uv run chat-jev setup` 打开和 app 一样的设置窗口，它写的是 app 那份配置，
+从源码跑时优先读它，其次才是项目根目录的 `.env`。
 
 注意：从终端跑 `watch` / `snapshot` / `dump` 时，系统把辅助功能权限算在**终端**头上，
 得给终端授权才能读到 QQ。只想让 chat-jev 拿权限，就用 app；`judge` 单句判别不需要任何权限。
@@ -206,11 +209,13 @@ LLM 这一步失败（没配 key、超时、返回格式不对）只会少一行
 
 ```bash
 uv run pytest
-packaging/build.sh      # 打包：dist/chat-jev.app 和 dist/chat-jev-<版本>-macos-<架构>.zip
+packaging/build.sh      # 打包：dist/chat-jev.app 和 dist/chat-jev-<版本>-macos-<架构>.dmg
 ```
 
 版本号在 `pyproject.toml`。打包用 PyInstaller（配置在 `packaging/chat-jev.spec`），
-脚本最后会用 `CHAT_JEV_SELFTEST=1` 跑一遍打出来的 app，确认模块都在、不弹权限框。
+图标由 `packaging/make_icon.py` 现画（系统聊天气泡符号 + 渐变底）。
+脚本会用 `CHAT_JEV_SELFTEST=1` 跑一遍打出来的 app，确认模块都在、不弹权限框，
+最后做成带「应用程序」快捷方式的 DMG。
 
 结构：
 
@@ -226,7 +231,8 @@ chat_jev/
     clipboard.py  剪贴板来源
   overlay.py      浮窗
   picker.py       ⌥+点击的全局鼠标监听
-  bundle.py       app 入口：日志、配置文件、缺密钥提示
+  bundle.py       app 入口：日志、配置文件、首次启动弹设置
+  settings_window.py  设置窗口（API key 等），写 ~/Library/Application Support/chat-jev/.env
   menubar.py      菜单栏图标 + 菜单
   app.py          Watcher 主循环
   cli.py          命令行

@@ -116,3 +116,16 @@ def test_dotenv_strips_inline_comments_and_keeps_shell_values(tmp_path, monkeypa
     assert os.environ["JEV_RELATION"] == "女朋友 # 不是注释"
     assert os.environ["AI_GATEWAY_API_KEY"] == "from-shell"
     assert os.environ["LLM_API_KEY"] == "abc"
+
+
+def test_write_env_updates_in_place(tmp_path):
+    from chat_jev.config import parse_env, write_env
+    env = tmp_path / ".env"
+    env.write_text("# 注释\nJEV_BACKEND=vercel\nAI_GATEWAY_API_KEY=\nJEV_RELATION=女朋友   # 关系\n# JEV_API_KEY=\n# LLM_BASE_URL=https://x\n")
+    write_env(env, {"AI_GATEWAY_API_KEY": "sk-1", "JEV_RELATION": "男朋友", "JEV_API_KEY": "",
+                    "LLM_BASE_URL": "https://y", "LLM_MODEL": "a b"})
+    text = env.read_text()
+    assert text.startswith("# 注释\nJEV_BACKEND=vercel\nAI_GATEWAY_API_KEY=sk-1\nJEV_RELATION=男朋友   # 关系\n# JEV_API_KEY=\n")
+    assert "LLM_BASE_URL=https://y" in text and 'LLM_MODEL="a b"' in text
+    assert parse_env(env)["LLM_MODEL"] == "a b"
+    assert env.stat().st_mode & 0o777 == 0o600
