@@ -41,6 +41,28 @@ def open_config() -> None:
     subprocess.run(["open", "-e", str(CONFIG_FILE)], check=False)
 
 
+def reset_stale_permission() -> None:
+    """没有辅助功能权限时，先清掉这个 app 的旧授权记录再申请。
+
+    系统按签名记授权：换了签名证书（或者从 ad-hoc 签名的老版本升上来），列表里那个开关看着是开的，
+    其实对新版本无效，重新拨一下也没用。清掉之后系统会重新弹申请，用户只需要打开开关。
+    没授权过的时候清一下也无害。
+    """
+    from ApplicationServices import AXIsProcessTrusted
+    from Foundation import NSBundle
+    if AXIsProcessTrusted():
+        return
+    bundle_id = NSBundle.mainBundle().bundleIdentifier()
+    if bundle_id:
+        subprocess.run(["tccutil", "reset", "Accessibility", bundle_id], capture_output=True, check=False)
+        print(f"[perm] 没有辅助功能权限，已清掉 {bundle_id} 的旧授权记录，重新申请", file=sys.stderr)
+
+
+def open_accessibility_settings() -> None:
+    subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+                   check=False)
+
+
 def open_log() -> None:
     subprocess.run(["open", "-a", "Console", str(LOG_FILE)], check=False)
 
@@ -70,6 +92,7 @@ def main() -> int:
         if not SettingsWindow(first_run=True).run_modal():
             return 1                                 # 点了退出
         load_settings(override=True)
+    reset_stale_permission()
     from .cli import main as cli_main
     # 想改默认行为（只判点选、只看某个人……）就在配置里写 JEV_WATCH_ARGS="--pick-only --interval 0.5"
     extra = shlex.split(os.environ.get("JEV_WATCH_ARGS", ""))

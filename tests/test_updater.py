@@ -15,3 +15,18 @@ def test_pick_asset_matches_arch():
                       {"name": "chat-jev-0.3.1-macos-arm64.zip", "browser_download_url": "zip"}]}
     assert pick_asset(rel, "arm64") == "arm"
     assert pick_asset(rel, "ppc") is None
+
+
+def test_trust_requirement_adds_extra_certs():
+    from chat_jev.updater import trust_requirement
+    own = 'identifier "io.x" and certificate leaf = H"' + "a" * 40 + '"'
+    assert trust_requirement(own, []) == own
+    assert trust_requirement(own, ["a" * 40]) == own                # 自己那张不重复
+    req = trust_requirement(own, ["b" * 40])
+    assert req == f'identifier "io.x" and (certificate leaf = H"{"a" * 40}" or certificate leaf = H"{"b" * 40}")'
+    assert trust_requirement('cdhash H"abc"', ["b" * 40]) == 'cdhash H"abc"'      # ad-hoc：不动
+
+
+def test_bundled_certs_reads_repo_file():
+    from chat_jev.updater import bundled_certs
+    assert bundled_certs()[0] == "ddee9fa1fe54ef299db1ac233e3369d5dd97f31e"

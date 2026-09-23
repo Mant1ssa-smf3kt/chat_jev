@@ -1,0 +1,4 @@
+# 签名证书指纹（SHA-1），见 README「签名证书」
+# sign  = 打包必须用的证书；build.sh 对不上就停
+# trust = 已装的 app 额外信任的证书：换证书时先把新证书写成 trust 发一版，已装的 app 才会接受新证书签的更新
+sign ddee9fa1fe54ef299db1ac233e3369d5dd97f31e

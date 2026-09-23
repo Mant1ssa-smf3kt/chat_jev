@@ -15,41 +15,34 @@ uv run --group dev pyinstaller --noconfirm --clean --distpath dist --workpath bu
 
 # 用固定的自签名证书签名（不是 Apple 的证书，所以仍然没公证）。
 # 系统按「bundle id + 证书」认这个 app：换版本不用重新给辅助功能权限，自动更新也靠它校验新包是不是自己人打的。
-# 证书和私钥在仓库外的 ~/.chat-jev-signing，第一次打包时生成。丢了就只能换新证书，已装的 app 要手动重装一次。
+# packaging/certs.txt 里的 sign 行钉死了该用哪张证书：对不上就停，绝不悄悄换证书（换了已装的 app 就收不到更新）。
+. packaging/signing.sh
 SIGN_DIR="${CHAT_JEV_SIGN_DIR:-$HOME/.chat-jev-signing}"
 KEYCHAIN="$SIGN_DIR/signing.keychain-db"
-IDENTITY="chat-jev self-signed"
+PINNED=$(certs_sign || true)
 if [ ! -f "$KEYCHAIN" ]; then
-  echo "生成签名证书 → $SIGN_DIR"
-  mkdir -p "$SIGN_DIR" && chmod 700 "$SIGN_DIR"
-  openssl rand -hex 24 > "$SIGN_DIR/keychain-password" && chmod 600 "$SIGN_DIR/keychain-password"
-  TMP=$(mktemp -d)
-  cat > "$TMP/cert.cnf" <<CNF
-[req]
-distinguished_name=dn
-x509_extensions=ext
-prompt=no
-[dn]
-CN=$IDENTITY
-[ext]
-basicConstraints=critical,CA:false
-keyUsage=critical,digitalSignature
-extendedKeyUsage=critical,codeSigning
-CNF
-  /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 7300 -config "$TMP/cert.cnf" \
-    -keyout "$TMP/key.pem" -out "$TMP/cert.pem" 2>/dev/null
-  /usr/bin/openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -out "$TMP/id.p12" -passout pass:p12
-  security create-keychain -p "$(cat "$SIGN_DIR/keychain-password")" "$KEYCHAIN"
-  security set-keychain-settings "$KEYCHAIN"               # 不自动上锁
-  security unlock-keychain -p "$(cat "$SIGN_DIR/keychain-password")" "$KEYCHAIN"
-  security import "$TMP/id.p12" -k "$KEYCHAIN" -P p12 -T /usr/bin/codesign >/dev/null
-  security set-key-partition-list -S apple-tool:,apple: -s -k "$(cat "$SIGN_DIR/keychain-password")" "$KEYCHAIN" >/dev/null
-  rm -rf "$TMP"
+  if [ -n "$PINNED" ]; then
+    echo "✗ 找不到签名证书 ${SIGN_DIR}（应该是指纹 $PINNED 的那张）。" >&2
+    echo "  从备份恢复这个目录再打包。证书确实丢了、要换新的，看 README「签名证书」。" >&2
+    exit 1
+  fi
+  echo "第一次打包，生成签名证书 → $SIGN_DIR"
+  create_identity "$SIGN_DIR"
 fi
-security unlock-keychain -p "$(cat "$SIGN_DIR/keychain-password")" "$KEYCHAIN"
+HASH=$(identity_hash "$SIGN_DIR")
+if [ -z "$PINNED" ]; then
+  printf '# 签名证书指纹（SHA-1），见 README「签名证书」\nsign %s\n' "$HASH" > "$CERTS_FILE"
+  PINNED=$HASH
+fi
+if [ "$HASH" != "$PINNED" ]; then
+  echo "✗ $SIGN_DIR 里的证书是 ${HASH:-（没有名为「chat-jev self-signed」的证书）}，但 $CERTS_FILE 要求 ${PINNED}。拿错备份了？" >&2
+  exit 1
+fi
 codesign --force --deep --keychain "$KEYCHAIN" --sign "$IDENTITY" dist/chat-jev.app
 codesign --verify --deep --strict dist/chat-jev.app
-codesign -d -r- dist/chat-jev.app 2>&1 | grep '^designated'
+codesign -d -r- dist/chat-jev.app 2>&1 | grep -q "certificate leaf = H\"$PINNED\"" \
+  || { echo "✗ 签出来的证书不是 $PINNED" >&2; exit 1; }
+echo "已签名，证书 $PINNED"
 
 CHAT_JEV_SELFTEST=1 dist/chat-jev.app/Contents/MacOS/chat-jev
 

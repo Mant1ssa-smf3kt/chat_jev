@@ -1,14 +1,16 @@
 """自动更新：定期看 GitHub 上的最新 release，有新版就下载 DMG、换掉当前的 app、重启。
 
-只在打包好的 app 里生效。安全上靠签名把关：新 app 必须和正在运行的这个用同一张证书签名
-（codesign 的 designated requirement 一致），否则拒绝安装。这张证书也让系统把新旧版本认成同一个程序，
-更新后辅助功能权限不用重新授权。ad-hoc 签名的旧版本（0.3.0 及以前）没法自动更新，只会提示去手动下载。
+只在打包好的 app 里生效。安全上靠签名把关：新 app 必须是正在运行的这个 app 信任的证书签的——
+它自己的证书，加上打包时 packaging/certs.txt 里 trust 的证书（换证书交接用）——否则拒绝安装。
+同一张证书也让系统把新旧版本认成同一个程序，更新后辅助功能权限不用重新授权。
+ad-hoc 签名的旧版本（0.3.0 及以前）没法自动更新，只会提示去手动下载。
 """
 
 from __future__ import annotations
 
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -74,6 +76,32 @@ def designated_requirement(app: Path) -> str | None:
     return None
 
 
+def bundled_certs() -> list[str]:
+    """打包进 app 的 certs.txt 里所有证书指纹（sign 和 trust 都算）。"""
+    path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent / "packaging")) / "certs.txt"
+    if not path.is_file():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in ("sign", "trust") and re.fullmatch(r"[0-9a-fA-F]{40}", parts[1]):
+            out.append(parts[1].lower())
+    return out
+
+
+def trust_requirement(own: str, extra: list[str]) -> str:
+    """校验新包用的签名要求：同一个 bundle id，证书是自己的或者 extra 里的任意一张。"""
+    ident = re.search(r'identifier "([^"]+)"', own)
+    leaf = re.search(r'certificate leaf = H"([0-9a-fA-F]{40})"', own)
+    if ident is None or leaf is None:
+        return own                                   # 看不懂的格式就只认自己
+    hashes = list(dict.fromkeys([leaf.group(1).lower(), *extra]))
+    if len(hashes) == 1:
+        return own
+    alts = " or ".join(f'certificate leaf = H"{h}"' for h in hashes)
+    return f'identifier "{ident.group(1)}" and ({alts})'
+
+
 class UpdateError(Exception):
     pass
 
@@ -127,6 +155,7 @@ class Updater:
                 return
 
             print(f"[update] {cur} → {latest}，下载 {url}", file=sys.stderr)
+            req = trust_requirement(req, bundled_certs())
             self.notify(f"正在更新到 {latest}", "下载中，完成后会自动重启")
             with tempfile.TemporaryDirectory(prefix="chat-jev-update-") as tmp:
                 dmg = Path(tmp) / "update.dmg"

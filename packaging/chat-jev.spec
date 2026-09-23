@@ -9,7 +9,8 @@ VERSION = os.environ["CHAT_JEV_VERSION"]
 a = Analysis(
     [os.path.join(SPECPATH, "entry.py")],
     pathex=[ROOT],
-    datas=[(os.path.join(ROOT, ".env.example"), ".")],
+    datas=[(os.path.join(ROOT, ".env.example"), "."),
+           (os.path.join(ROOT, "packaging", "certs.txt"), ".")],     # 自动更新信任哪些证书
     hiddenimports=collect_submodules("chat_jev"),
     excludes=["tkinter", "pytest"],
 )

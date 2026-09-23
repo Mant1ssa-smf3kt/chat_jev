@@ -312,7 +312,9 @@ def _wait_for_permission(watcher: Watcher) -> None:
     from Foundation import NSTimer
 
     from . import ax
-    hint = "系统设置 → 隐私与安全性 → 辅助功能，打开 chat-jev"
+    from .bundle import open_accessibility_settings
+    hint = "在打开的「辅助功能」设置里，把 chat-jev 的开关打开"
+    open_accessibility_settings()
     watcher.overlay.hide_after, keep = 0, watcher.overlay.hide_after    # 提示一直挂着
     watcher.overlay.show_info("需要辅助功能权限", hint)
     watcher.statusbar.set_status("等待辅助功能权限 · " + hint)
