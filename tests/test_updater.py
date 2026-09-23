@@ -1,6 +1,6 @@
-"""更新器里不碰系统的那部分：版本比较、挑安装包。"""
+"""更新器里不碰系统的那部分：版本比较、找最新 tag、拼安装包地址。"""
 
-from chat_jev.updater import is_newer, parse_version, pick_asset
+from chat_jev.updater import asset_url, is_newer, parse_version, tag_from_redirect
 
 
 def test_version_compare():
@@ -9,12 +9,15 @@ def test_version_compare():
     assert not is_newer("v0.3.0", "0.3.0") and not is_newer("v0.2.9", "0.3.0")
 
 
-def test_pick_asset_matches_arch():
-    rel = {"assets": [{"name": "chat-jev-0.3.1-macos-x86_64.dmg", "browser_download_url": "x86"},
-                      {"name": "chat-jev-0.3.1-macos-arm64.dmg", "browser_download_url": "arm"},
-                      {"name": "chat-jev-0.3.1-macos-arm64.zip", "browser_download_url": "zip"}]}
-    assert pick_asset(rel, "arm64") == "arm"
-    assert pick_asset(rel, "ppc") is None
+def test_latest_tag_from_redirect():
+    assert tag_from_redirect("https://github.com/Mant1ssa-smf3kt/chat_jev/releases/tag/v0.3.2") == "v0.3.2"
+    assert tag_from_redirect("https://github.com/Mant1ssa-smf3kt/chat_jev/releases") is None   # 还没有 release
+    assert tag_from_redirect("") is None
+
+
+def test_asset_url_follows_build_naming():
+    assert asset_url("v0.3.2", "arm64") == (
+        "https://github.com/Mant1ssa-smf3kt/chat_jev/releases/download/v0.3.2/chat-jev-0.3.2-macos-arm64.dmg")
 
 
 def test_trust_requirement_adds_extra_certs():

@@ -21,7 +21,8 @@ from typing import Callable
 import httpx
 
 REPO = "Mant1ssa-smf3kt/chat_jev"
-API = f"https://api.github.com/repos/{REPO}/releases/latest"
+# 不走 api.github.com：未登录每个 IP 每小时只有 60 次，公司/校园网一共用一份，很容易 403。
+# releases/latest 网页会 302 到 releases/tag/<最新 tag>，安装包地址按命名规则拼出来，都不受这个限制。
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 
 # 换 app 的脚本：等旧进程退出 → 把新 app 挪到原位（失败就还原）→ 重新打开
@@ -49,13 +50,15 @@ def is_newer(latest: str, current: str) -> bool:
     return parse_version(latest) > parse_version(current)
 
 
-def pick_asset(release: dict, arch: str) -> str | None:
-    """release JSON 里找本机架构的 DMG 下载地址。"""
-    for a in release.get("assets", []):
-        name = a.get("name", "")
-        if name.endswith(f"-macos-{arch}.dmg"):
-            return a.get("browser_download_url")
-    return None
+def tag_from_redirect(location: str) -> str | None:
+    """releases/latest 的 302 Location → tag 名；不是预期的地址就 None。"""
+    m = re.search(r"/releases/tag/([^/?#]+)$", location)
+    return m.group(1) if m else None
+
+
+def asset_url(tag: str, arch: str) -> str:
+    """build.sh 的 DMG 命名规则：chat-jev-<版本>-macos-<架构>.dmg"""
+    return f"https://github.com/{REPO}/releases/download/{tag}/chat-jev-{tag.lstrip('vV')}-macos-{arch}.dmg"
 
 
 def current_version() -> str:
@@ -131,18 +134,17 @@ class Updater:
 
     def _check(self, manual: bool) -> None:
         cur = current_version()
-        with httpx.Client(timeout=20, follow_redirects=True,
-                          headers={"Accept": "application/vnd.github+json", "User-Agent": "chat-jev"}) as http:
-            rel = http.get(API).raise_for_status().json()
-            latest = rel.get("tag_name", "")
+        with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": "chat-jev"}) as http:
+            r = http.get(RELEASES_PAGE, follow_redirects=False)
+            latest = tag_from_redirect(r.headers.get("location", "")) if r.is_redirect else None
+            if latest is None:
+                raise UpdateError(f"GitHub 返回 {r.status_code}，没找到最新版本")
             if not is_newer(latest, cur):
                 print(f"[update] 已是最新 {cur}（GitHub 上是 {latest}）", file=sys.stderr)
                 if manual:
                     self.notify("已是最新版本", f"当前 {cur}")
                 return
-            url = pick_asset(rel, platform.machine())
-            if url is None:
-                raise UpdateError(f"{latest} 没有 {platform.machine()} 的安装包")
+            url = asset_url(latest, platform.machine())
 
             app = app_path()
             req = designated_requirement(app)
@@ -160,6 +162,8 @@ class Updater:
             with tempfile.TemporaryDirectory(prefix="chat-jev-update-") as tmp:
                 dmg = Path(tmp) / "update.dmg"
                 with http.stream("GET", url) as r:
+                    if r.status_code == 404:
+                        raise UpdateError(f"{latest} 没有 {platform.machine()} 的安装包")
                     r.raise_for_status()
                     with open(dmg, "wb") as f:
                         for chunk in r.iter_bytes(1 << 16):
